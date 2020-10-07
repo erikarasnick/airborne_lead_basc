@@ -1,0 +1,225 @@
+---
+title: "AirPb and BASC Tables"
+author: "Erika Rasnick"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+    highlight: pygments
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+
+d_lead <- readRDS("d_lead.Rds")
+```
+
+
+```{r}
+allN <- d_lead %>% 
+  select(ndvi, dep_ind, ecat, bloodPb, parent_educ, male) %>% 
+  summarize(N = n())
+
+allEduc <- d_lead %>% 
+  select(ndvi, dep_ind, ecat, bloodPb, parent_educ, male) %>% 
+  group_by(parent_educ) %>% 
+  summarize(N = n()) %>% 
+  mutate(prop = paste0(round(N/allN$N * 100), "%"),
+        `Maternal Education` = "") %>% 
+  select(-N) %>% 
+  spread(parent_educ, prop)
+
+d_lead %>% 
+  select(ndvi, dep_ind, ecat, bloodPb, parent_educ, male) %>% 
+  group_by(parent_educ) %>% 
+  summarize(N = n()) 
+
+allMeans <- d_lead %>% 
+  select(ndvi, dep_ind, ecat, bloodPb, parent_educ, male) %>% 
+  summarize(ndvi_avg = mean(ndvi), 
+            dep_avg = mean(dep_ind),
+            ecat_avg = mean(ecat), 
+            bloodPb_avg = mean(bloodPb),
+            ndvi_sd = sd(ndvi),
+            dep_sd = sd(dep_ind),
+            ecat_sd = sd(ecat),
+            bloodPb_sd = sd(bloodPb)) %>% 
+  transmute(Greenspace = paste0(round(ndvi_avg,2), " (", 
+                                round(ndvi_sd,2), ")"),
+            `(NDVI range -1 to 1)` = "",
+            `Deprivation Index` = paste0(round(dep_avg,2), " (", 
+                                         round(dep_sd,2), ")"),
+            `(Range 0 to 1)` = "",
+            `ECAT (ug/m3)` = paste0(round(ecat_avg,2), " (", 
+                          round(ecat_sd,2), ")"),
+            `Blood Lead (ug/dL)` = paste0(round(bloodPb_avg,2), " (", 
+                                  round(bloodPb_sd,2), ")")
+         )
+  
+allAirPb <- d_lead %>% 
+  select(id, age_month0:age_month144) %>% 
+  gather(age_month0:age_month144, key="lag", value="air_pb") %>% 
+  summarize(avg_airPb = mean(air_pb), 
+            sd_airPb = sd(air_pb),
+            med_airPb = median(air_pb), 
+            iqr_airPb = IQR(air_pb)) %>% 
+  transmute(`Median (IQR) Monthly Air Lead (ng/m3)`=  paste0(round(med_airPb,2), " (", 
+                                             round(iqr_airPb,2), ")"))
+
+incl_cov <- cbind(allN, allEduc, allMeans, allAirPb)
+incl_cov <- select(incl_cov, N, `Maternal Education`:`3`, Greenspace:`Median (IQR) Monthly Air Lead (ng/m3)`)
+colnames(incl_cov)[3:5] <- c("  High School or Less", "  Some College", "  College or Graduate School")
+incl_cov <- t(incl_cov)
+incl_cov
+```
+
+
+```{r}
+d_lead_all <- readRDS("d_lead_all.Rds")
+d_lead_missing <- filter(d_lead_all, !id %in% d_lead$id)
+```
+
+```{r}
+exclN <- d_lead_missing %>%
+  summarize(N = n())
+
+d_lead_missing %>% 
+  group_by(male) %>% 
+  tally() %>% 
+  mutate(pct = n/sum(n))
+
+exclEduc <- d_lead_missing %>% 
+  filter(!is.na(parent_educ)) %>% 
+  group_by(parent_educ) %>% 
+  summarize(N = n()) %>% 
+  mutate(prop = paste0(round(N/71 * 100), "%"),
+        `Maternal Education` = "(N=71)") %>% 
+  select(-N) %>% 
+  spread(parent_educ, prop)
+
+d_lead_missing %>% 
+  filter(!is.na(parent_educ)) %>% 
+  group_by(parent_educ) %>% 
+  summarize(N = n())
+
+
+exclMeans <- d_lead_missing %>% 
+  select(ndvi, dep_ind, ecat, bloodPb, parent_educ, male) %>% 
+  summarize(ndvi_avg = mean(ndvi, na.rm=T), 
+            dep_avg = mean(dep_ind, na.rm=T),
+            ecat_avg = mean(ecat, na.rm=T), 
+            bloodPb_avg = mean(bloodPb, na.rm=T),
+            ndvi_sd = sd(ndvi, na.rm=T),
+            dep_sd = sd(dep_ind, na.rm=T),
+            ecat_sd = sd(ecat, na.rm=T),
+            bloodPb_sd = sd(bloodPb, na.rm=T)) %>% 
+  transmute(Greenspace = paste0(round(ndvi_avg,2), " (", round(ndvi_sd,2), ")"),
+            `(NDVI range -1 to 1)` = "",
+            `Deprivation Index` = paste0(round(dep_avg,2), " (", round(dep_sd,2), "), (N=80)"),
+            `(Range 0 to 1)` = "",
+            `ECAT (ug/m3)` = paste0(round(ecat_avg,2), " (", round(ecat_sd,2), ")"),
+            `Blood Lead (ug/dL)` = paste0(round(bloodPb_avg,2), " (", round(bloodPb_sd,2), "), (N=37)")
+         )
+  
+exclAirPb <- d_lead_missing %>% 
+  select(id, age_month0:age_month144) %>% 
+  gather(age_month0:age_month144, key="lag", value="air_pb") %>% 
+  summarize(med_airPb = median(air_pb, na.rm = T), 
+            iqr_airPb = IQR(air_pb, na.rm = T)) %>% 
+  transmute(`Median (IQR) Monthly Air Lead (ng/m3)`=  paste0(round(med_airPb,2), " (", 
+                                             round(iqr_airPb,2), ") (N=55)"))
+
+excl_cov <- cbind(exclN, exclEduc, exclMeans, exclAirPb)
+excl_cov <- select(excl_cov, N, `Maternal Education`:`3`, Greenspace:`Median (IQR) Monthly Air Lead (ng/m3)`)
+colnames(excl_cov)[3:5] <- c("  High School or Less", "  Some College", "  College or Graduate School")
+excl_cov <- t(excl_cov)
+excl_cov
+```
+
+```{r}
+cov.table <- cbind(incl_cov, excl_cov)
+colnames(cov.table) = c("Included", "Excluded")
+kable(cov.table, booktabs=T, caption="Confounders") %>% 
+  add_indent(c(4, 5, 6, 8, 10)) %>% 
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+
+```{r, echo=TRUE}
+d_lead_incl <- d_lead %>% 
+  mutate(included = TRUE)
+
+d_lead_excl <- d_lead_missing %>% 
+  mutate(included = FALSE)
+
+d_lead_incl_excl <- bind_rows(d_lead_incl, d_lead_excl)
+
+table(d_lead_incl_excl$parent_educ, d_lead_incl_excl$included)
+chisq.test(d_lead_incl_excl$parent_educ, d_lead_incl_excl$included)$p.value # 0.09190237
+t.test(ndvi ~ included, data=d_lead_incl_excl)$p.value # 0.6335593
+t.test(dep_ind ~ included, data=d_lead_incl_excl)$p.value # 0.5863355
+t.test(ecat ~ included, data=d_lead_incl_excl)$p.value # 0.2013749 
+t.test(bloodPb ~ included, data=d_lead_incl_excl)$p.value # 0.4836251
+```
+
+```{r}
+incl_basc <- d_lead %>% 
+  select(id, Anxiety:Withdrawal) %>% 
+  gather(Anxiety:Withdrawal, key="BASC Subscore", value="score") %>% 
+  group_by(`BASC Subscore`) %>% 
+  summarize(out_mean = mean(score), 
+            out_sd = sd(score)) %>% 
+  mutate(All = paste0(round(out_mean,1), " (", round(out_sd,1), ")")) %>% 
+  select(`BASC Subscore`, All)
+
+basc_table <- incl_basc %>% 
+  mutate(`BASC Subscore` = factor(`BASC Subscore`, levels=c("Anxiety", "Depression", "Somatization",
+                                                            "Aggression", "Conduct", "Hyperactivity", 
+                                                            "Attention", "Atypicality", "Withdrawal"), ordered=T)) %>% 
+  arrange(`BASC Subscore`)
+
+kable(basc_table, booktabs=T, caption="BASC Scores") %>% 
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+```{r}
+excl_basc <- d_lead_missing %>% 
+  select(id, Anxiety:Withdrawal) %>% 
+  gather(Anxiety:Withdrawal, key="BASC Subscore", value="score") %>% 
+  group_by(`BASC Subscore`) %>% 
+  summarize(out_mean = mean(score, na.rm = TRUE), 
+            out_sd = sd(score, na.rm = TRUE)) %>% 
+  mutate(All = paste0(round(out_mean,1), " (", round(out_sd,1), ")")) %>% 
+  select(`BASC Subscore`, All)
+
+basc_table <- excl_basc %>% 
+  mutate(`BASC Subscore` = factor(`BASC Subscore`, levels=c("Anxiety", "Depression", "Somatization",
+                                                            "Aggression", "Conduct", "Hyperactivity", 
+                                                            "Attention", "Atypicality", "Withdrawal"), ordered=T)) 
+
+kable(basc_table, booktabs=T, caption="Excluded BASC Scores") %>% 
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+
+```{r}
+t.test(Anxiety ~ included, data=d_lead_incl_excl)$p.value # 0.6335593
+t.test(Depression ~ included, data=d_lead_incl_excl)$p.value # 0.5863355
+t.test(Somatization ~ included, data=d_lead_incl_excl)$p.value # 0.2013749 
+t.test(Aggression ~ included, data=d_lead_incl_excl)$p.value # 0.4836251
+t.test(Conduct ~ included, data=d_lead_incl_excl)$p.value # 0.6335593
+t.test(Hyperactivity ~ included, data=d_lead_incl_excl)$p.value # 0.5863355
+t.test(Attention ~ included, data=d_lead_incl_excl)$p.value # 0.2013749 
+t.test(Atypicality ~ included, data=d_lead_incl_excl)$p.value # 0.4836251
+t.test(Withdrawal ~ included, data=d_lead_incl_excl)$p.value # 0.4836251
+```
+
