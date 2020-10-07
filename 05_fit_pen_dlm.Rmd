@@ -1,0 +1,170 @@
+---
+title: "Penalized DLMs - Airborne Lead and BASC"
+author: "Erika Rasnick"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+    highlight: pygments
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(dlnm)
+
+# prepare data
+d_lead <- readRDS("d_lead.rds")
+
+# boys and girls together
+d_lead_all <- d_lead %>%
+  gather(Anxiety:Withdrawal, key="outcome", value="score") %>%
+  mutate(outcome = factor(outcome,
+                          levels=c("Anxiety", "Depression", "Somatization",
+                                   "Aggression", "Conduct", "Hyperactivity",
+                                   "Attention", "Atypicality", "Withdrawal"), ordered=T)) %>%
+  group_by(outcome) %>%
+  nest()
+```
+
+# Fit penalized DLM with knot at every lag
+
+```{r}
+library(mgcv)
+
+mdl <- function(x, x.cb, x.pen) {
+  gam(score ~ x.cb + ndvi + dep_ind + ecat + bloodPb + factor(parent_educ),
+           data = x, paraPen = list(x.cb = x.pen))
+}
+
+crssprd <- function(x.cb, x.mdl) {
+  crosspred(x.cb, x.mdl, at=1)
+}
+
+dlnm_lead <- d_lead_all %>%
+  mutate(Q = map(data, ~select(.x, age_month0:age_month144)),
+         cb = map(Q, ~crossbasis(.x,
+                                 lag=144,
+                                 argvar=list("lin"),
+                                 arglag = list(fun = "cr", knots = seq(0, 144, 1)))),
+         cbgamPen = map(cb, cbPen),
+         model = pmap(list(data, cb, cbgamPen), mdl),
+         pred = map2(cb, model, crssprd))
+```
+
+## Cumulative coefficients
+
+```{r}
+cumul_fits <- dlnm_lead %>%
+  select(outcome, pred) %>%
+  mutate(allFit = map_dbl(pred, ~c(.x$allfit)),
+         allLow = map(pred, ~c(.x$alllow)),
+         allHigh = map(pred, ~c(.x$allhigh))) %>%
+  select(-pred) %>%
+  unnest(cols = c(allLow, allHigh))
+
+cumul_fits %>%
+  ggplot(aes(x=outcome, y=allFit, ymax=allHigh, ymin=allLow)) +
+  geom_hline(yintercept = 0, lty = 2, color = 'darkgrey') +
+  geom_pointrange(fatten=1.3) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
+  ylab("Cumulative Regression Coefficient") +
+  xlab("Outcome")
+```
+
+## Coefficients for every lag
+
+```{r}
+mat_fits <- dlnm_lead %>%
+  select(outcome, pred, model) %>%
+  mutate(matFit = map(pred, ~c(.x$matfit)),
+         matLow = map(pred, ~c(.x$matlow)),
+         matHigh = map(pred, ~c(.x$mathigh)),
+         edf = map_dbl(model, ~sum(.x$edf))) %>%
+  select(-pred, -model) %>%
+  mutate(lag = list(0:144)) %>%
+  unnest(cols = c(matFit, matLow, matHigh, lag))
+write_csv(mat_fits, 'penalized_dlm_coefficients.csv')
+
+mat_fits %>% 
+  group_by(outcome) %>% 
+  summarize(max(edf))
+
+
+mat_fits %>%
+  ungroup() %>% 
+  mutate(years = lag/12, 
+         outcome = paste0(outcome, " (edf = ", round(edf), ")"),
+         outcome = factor(outcome, 
+                          levels = c("Anxiety (edf = 14)", "Depression (edf = 9)", "Somatization (edf = 9)",
+                                     "Aggression (edf = 13)", "Conduct (edf = 10)", 
+                                     "Hyperactivity (edf = 10)", "Attention (edf = 13)", 
+                                     "Atypicality (edf = 15)", "Withdrawal (edf = 12)"), ordered = T)) %>%
+  ggplot() +
+  geom_hline(yintercept=0, linetype=2) +
+  geom_line(aes(x=years,y=matFit)) +
+  geom_ribbon(aes(ymax=matHigh, ymin=matLow, x=years), alpha=0.3) +
+  scale_x_continuous(breaks=seq(0, 12, 1)) +
+  facet_wrap(~ outcome, scales="free", nrow=3) +
+  theme_classic() +
+  ylab("Regression Coefficient") +
+  xlab("Age (years)") +
+  theme(axis.title = element_text(size=10),
+        strip.text = element_text(size=8),
+        axis.text = element_text(size=8))
+ggsave("penalized_dlm_basc_plot.pdf", height=5, width=7, units = 'in')
+```
+
+# Summary of windows
+
+```{r}
+windows <- mat_fits %>% 
+  mutate(window = case_when(
+    matLow > 0 & matHigh > 0 ~ "positive",
+    matLow < 0 & matHigh < 0 ~ "negative")) %>% 
+  filter(!is.na(window)) %>% 
+  mutate(window_id = 1)
+
+for (i in 2:nrow(windows)) {
+  if (windows$window[i] != windows$window[i-1] | windows$outcome[i] != windows$outcome[i-1] ) {
+    windows$window_id[i] <- windows$window_id[i-1] + 1
+  } else {
+    windows$window_id[i] <- windows$window_id[i-1]
+  }
+}
+
+min_lag <- windows %>% 
+  group_by(window_id) %>% 
+  slice_min(lag) %>% 
+  arrange(outcome, lag) %>% 
+  rename(min_lag = lag) %>% 
+  select(outcome, min_lag, window_id)
+
+max_lag <- windows %>% 
+  group_by(window_id) %>% 
+  slice_max(lag) %>% 
+  arrange(outcome, lag) %>% 
+  rename(max_lag = lag) %>% 
+  select(max_lag, window_id)
+
+min_lag %>% 
+  left_join(max_lag, by = 'window_id') %>% 
+  select(window_id, outcome, min_lag, max_lag)
+```
+
+# Peak effects
+
+```{r}
+windows %>% 
+  group_by(outcome) %>% 
+  filter(matFit == max(matFit))
+```
+
